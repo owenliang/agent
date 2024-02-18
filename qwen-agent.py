@@ -26,7 +26,7 @@ tool_descs=[] # 拼接工具详情
 for t in tools:
     args_desc=[]
     for name,info in t.args.items():
-        args_desc.append({'name':name,'description':info['description'],'type':info['type']})
+        args_desc.append({'name':name,'description':info['description'] if 'description' in info else '','type':info['type']})
     args_desc=json.dumps(args_desc,ensure_ascii=False)
     tool_descs.append('%s: %s,args: %s'%(t.name,t.description,args_desc))
 tool_descs='\n'.join(tool_descs)
@@ -34,10 +34,12 @@ tool_descs='\n'.join(tool_descs)
 #print(tool_names)
 #print(tool_descs)
 
-chat_history=[]
 prompt_tpl='''Answer the following questions as best you can. You have access to the following tools:
 
 {tool_descs}
+
+You may need the following infomation as well: 
+{chat_history}
 
 Use the following format:
 
@@ -57,7 +59,7 @@ Question: {query}
 '''
 
 # 测试prompt
-prompt=prompt_tpl.format(tool_descs=tool_descs,tool_names=tool_names,query='查一下明天青岛的天气',agent_scratchpad='')
+prompt=prompt_tpl.format(chat_history='',tool_descs=tool_descs,tool_names=tool_names,query='查一下明天青岛的天气',agent_scratchpad='')
 #print(prompt)
 
 def agent_execute(query,chat_history=[]):
@@ -66,10 +68,10 @@ def agent_execute(query,chat_history=[]):
     agent_scratchpad='' # agent执行过程
     while True:
         # 1）触发llm思考下一步action
-        prompt=prompt_tpl.format(tool_descs=tool_descs,tool_names=tool_names,query=query,agent_scratchpad=agent_scratchpad)
+        history='\n'.join(['Question:%s\nAnswer:%s'%(his[0],his[1]) for his in chat_history])
+        prompt=prompt_tpl.format(chat_history=history,tool_descs=tool_descs,tool_names=tool_names,query=query,agent_scratchpad=agent_scratchpad)
         print('prompt: %s\n\033[32magent正在思考... ...'%prompt,flush=True)
-        response=llm(prompt,history=chat_history,user_stop_words=['Observation:'])
-        chat_history.append((prompt,response))
+        response=llm(prompt,user_stop_words=['Observation:'])
         print('---LLM raw response\n%s\n\033[0m---'%response,flush=True)
         
         # 2）解析thought+action+action input+observation or thought+final answer
@@ -82,6 +84,7 @@ def agent_execute(query,chat_history=[]):
         # 3）返回final answer，执行完成
         if final_answer_i!=-1 and thought_i<final_answer_i:
             print('\033[34mfinal answer: \033[0m%s\n\033[34m\n'%(response[final_answer_i+len('\nFinal Answer:'):]),flush=True)
+            chat_history.append((query,response[final_answer_i+len('\nFinal Answer:'):]))
             return True,response[final_answer_i+len('\nFinal Answer:'):],chat_history
         
         # 4）解析action
@@ -109,13 +112,21 @@ def agent_execute(query,chat_history=[]):
             action_input=json.loads(action_input)
             tool_ret=the_tool.invoke(input=json.dumps(action_input))
         except Exception as e:
-            observation='the tool has error:{}, we can try once more'.format(e)
+            observation='the tool has error:{}'.format(e)
         else:
             observation=str(tool_ret)
         agent_scratchpad=agent_scratchpad+response+observation+'\n'
 
+def agent_execute_with_retry(query,chat_history=[],retry_times=3):
+    for i in range(retry_times):
+        success,result,chat_history=agent_execute(query,chat_history=chat_history)
+        if success:
+            return success,result,chat_history
+    return success,result,chat_history
+
 my_history=[]
 while True:
     query=input('query:')
-    success,result,my_history=agent_execute(query,chat_history=my_history)
-    my_history=my_history[-20:]
+    success,result,my_history=agent_execute_with_retry(query,chat_history=my_history)
+    print(result)
+    my_history=my_history[-10:]
