@@ -10,25 +10,26 @@ def llm(query,history=[],user_stop_words=[]):    # 调用api_server
     agent_key=os.environ.get("AGENT_KEY")
     app_id=os.environ.get("APP_ID")
 
-    messages=[{'role':'system','content':'You are a helpful assistant.'}]
-    for hist in history:
-        messages.append({'role':'user','content':hist[0]})
-        messages.append({'role':'assistant','content':hist[1]})
-    messages.append({'role':'user','content':query})
-    client=broadscope_bailian.AccessTokenClient(access_key_id=access_key_id, access_key_secret=access_key_secret,
-                                                    agent_key=agent_key)
-    resp=broadscope_bailian.Completions(token=client.get_token()).create(
-        app_id=app_id,
-        messages=messages,
-        result_format="message",
-        stop=user_stop_words,
-    )
-    if not resp.get("Success"):
-        return resp.get('Message')
-
-    content=resp.get("Data", {}).get("Choices", [])[0].get("Message", {}).get("Content")
-    return content
-
+    try:
+        messages=[{'role':'system','content':'You are a helpful assistant.'}]
+        for hist in history:
+            messages.append({'role':'user','content':hist[0]})
+            messages.append({'role':'assistant','content':hist[1]})
+        messages.append({'role':'user','content':query})
+        client=broadscope_bailian.AccessTokenClient(access_key_id=access_key_id, access_key_secret=access_key_secret,
+                                                        agent_key=agent_key)
+        resp=broadscope_bailian.Completions(token=client.get_token()).create(
+            app_id=app_id,
+            messages=messages,
+            result_format="message",
+            stop=user_stop_words,
+        )
+        # print(resp)
+        content=resp.get("Data", {}).get("Choices", [])[0].get("Message", {}).get("Content")
+        return content
+    except Exception as e:
+        return str(e)
+    
 # travily搜索引擎
 os.environ['TAVILY_API_KEY']='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'    # travily搜索引擎api key
 tavily=TavilySearchResults(max_results=5)
