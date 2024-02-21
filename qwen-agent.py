@@ -1,25 +1,41 @@
 import os
 import json
 from langchain_community.tools.tavily_search import TavilySearchResults
-import requests
-
-os.environ['TAVILY_API_KEY']='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'    # travily搜索引擎api key
+import broadscope_bailian
+import datetime
 
 def llm(query,history=[],user_stop_words=[]):    # 调用api_server
-    response=requests.post('http://localhost:8000/chat',json={
-        'query':query,
-        'stream': False,
-        'history':history,
-        'user_stop_words':user_stop_words,
-    })
-    return response.json()['text']
-    
+    access_key_id=os.environ.get("ACCESS_KEY_ID")
+    access_key_secret=os.environ.get("ACCESS_KEY_SECRET")
+    agent_key=os.environ.get("AGENT_KEY")
+    app_id=os.environ.get("APP_ID")
+
+    messages=[{'role':'system','content':'You are a helpful assistant.'}]
+    for hist in history:
+        messages.append({'role':'user','content':hist[0]})
+        messages.append({'role':'assistant','content':hist[1]})
+    messages.append({'role':'user','content':query})
+    client=broadscope_bailian.AccessTokenClient(access_key_id=access_key_id, access_key_secret=access_key_secret,
+                                                    agent_key=agent_key)
+    resp=broadscope_bailian.Completions(token=client.get_token()).create(
+        app_id=app_id,
+        messages=messages,
+        result_format="message",
+        stop=user_stop_words,
+    )
+    if not resp.get("Success"):
+        return resp.get('Message')
+
+    content=resp.get("Data", {}).get("Choices", [])[0].get("Message", {}).get("Content")
+    return content
+
 # travily搜索引擎
+os.environ['TAVILY_API_KEY']='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'    # travily搜索引擎api key
 tavily=TavilySearchResults(max_results=5)
-tavily.description='在线搜索知识的引擎，可以检索到最近或者当下的实时数据，当用户的提问可能涉及实时信息的时候，你应该使用该工具。'
+tavily.description='这是一个类似谷歌和百度的搜索引擎，搜索知识、天气、股票、电影、小说、百科等都是支持的哦，如果你不确定就应该搜索一下，谢谢！s'
 
 # 工具列表
-tools=[tavily, ]  
+tools=[tavily, ]
 
 tool_names='or'.join([tool.name for tool in tools])  # 拼接工具名
 tool_descs=[] # 拼接工具详情
@@ -31,14 +47,11 @@ for t in tools:
     tool_descs.append('%s: %s,args: %s'%(t.name,t.description,args_desc))
 tool_descs='\n'.join(tool_descs)
 
-#print(tool_names)
-#print(tool_descs)
-
-prompt_tpl='''Answer the following questions as best you can. You have access to the following tools:
+prompt_tpl='''Today is {today}. Please Answer the following questions as best you can. You have access to the following tools:
 
 {tool_descs}
 
-You may need the following infomation as well: 
+These are chat history before:
 {chat_history}
 
 Use the following format:
@@ -58,10 +71,6 @@ Question: {query}
 {agent_scratchpad}
 '''
 
-# 测试prompt
-prompt=prompt_tpl.format(chat_history='',tool_descs=tool_descs,tool_names=tool_names,query='查一下明天青岛的天气',agent_scratchpad='')
-#print(prompt)
-
 def agent_execute(query,chat_history=[]):
     global tools,tool_names,tool_descs,prompt_tpl,llm,tokenizer
     
@@ -69,10 +78,11 @@ def agent_execute(query,chat_history=[]):
     while True:
         # 1）触发llm思考下一步action
         history='\n'.join(['Question:%s\nAnswer:%s'%(his[0],his[1]) for his in chat_history])
-        prompt=prompt_tpl.format(chat_history=history,tool_descs=tool_descs,tool_names=tool_names,query=query,agent_scratchpad=agent_scratchpad)
-        print('prompt: %s\n\033[32magent正在思考... ...'%prompt,flush=True)
+        today=datetime.datetime.now().strftime('%Y-%m-%d')
+        prompt=prompt_tpl.format(today=today,chat_history=history,tool_descs=tool_descs,tool_names=tool_names,query=query,agent_scratchpad=agent_scratchpad)
+        print('\033[32m---等待LLM返回... ...\n%s\n\033[0m'%prompt,flush=True)
         response=llm(prompt,user_stop_words=['Observation:'])
-        print('---LLM raw response\n%s\n\033[0m---'%response,flush=True)
+        print('\033[34m---LLM返回---\n%s\n---\033[34m'%response,flush=True)
         
         # 2）解析thought+action+action input+observation or thought+final answer
         thought_i=response.rfind('Thought:')
@@ -83,18 +93,19 @@ def agent_execute(query,chat_history=[]):
         
         # 3）返回final answer，执行完成
         if final_answer_i!=-1 and thought_i<final_answer_i:
-            print('\033[34mfinal answer: \033[0m%s\n\033[34m\n'%(response[final_answer_i+len('\nFinal Answer:'):]),flush=True)
-            chat_history.append((query,response[final_answer_i+len('\nFinal Answer:'):]))
-            return True,response[final_answer_i+len('\nFinal Answer:'):],chat_history
+            final_answer=response[final_answer_i+len('\nFinal Answer:'):].strip()
+            chat_history.append((query,final_answer))
+            return True,final_answer,chat_history
         
         # 4）解析action
-        if not (thought_i<action_i<action_input_i<observation_i):
-            print('\033[31m LLM回复格式异常, 放弃继续思考.\nresponse:%s\n \033[0m'%response,flush=True)
+        if not (thought_i<action_i<action_input_i):
             return False,'LLM回复格式异常',chat_history
+        if observation_i==-1:
+            observation_i=len(response)
+            response=response+'Observation: '
         thought=response[thought_i+len('Thought:'):action_i].strip()
         action=response[action_i+len('\nAction:'):action_input_i].strip()
         action_input=response[action_input_i+len('\nAction Input:'):observation_i].strip()
-        print('\033[34mthought: \033[0m%s\n\033[34maction: \033[0m%s\n\033[34maction_input: \033[0m%s\n'%(thought,action,action_input),flush=True)
         
         # 5）匹配tool
         the_tool=None
@@ -128,5 +139,4 @@ my_history=[]
 while True:
     query=input('query:')
     success,result,my_history=agent_execute_with_retry(query,chat_history=my_history)
-    print(result)
     my_history=my_history[-10:]
