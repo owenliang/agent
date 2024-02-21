@@ -4,15 +4,4 @@
 
 ## 依赖
 
-cuda 11.8
-python 3.10
-
-```
-bash install.sh
-```
-
-## 使用
-
-```
-python vllm_server.py
-```
+基于阿里云百炼的通义千问200B大模型
